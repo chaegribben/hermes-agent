@@ -99,3 +99,82 @@ def test_auxiliary_non_opencode_call_has_no_affinity_header(monkeypatch):
         base_url="https://openrouter.ai/api/v1",
     )
     assert OPENCODE_SESSION_HEADER not in (result.get("extra_headers") or {})
+
+
+
+def test_codex_aux_adapter_forwards_extra_headers_to_responses():
+    from agent.auxiliary_client import _CodexCompletionsAdapter
+
+    message_item = SimpleNamespace(
+        type="message",
+        role="assistant",
+        status="completed",
+        content=[SimpleNamespace(type="output_text", text="ok")],
+    )
+    events = [
+        SimpleNamespace(type="response.created"),
+        SimpleNamespace(type="response.output_item.done", item=message_item),
+        SimpleNamespace(
+            type="response.completed",
+            response=SimpleNamespace(
+                status="completed",
+                id="resp_test",
+                usage=SimpleNamespace(input_tokens=1, output_tokens=1, total_tokens=2),
+            ),
+        ),
+    ]
+
+    class _Stream:
+        def __iter__(self):
+            return iter(events)
+
+        def close(self):
+            pass
+
+    captured = {}
+
+    def _create(**kwargs):
+        captured.update(kwargs)
+        return _Stream()
+
+    client = SimpleNamespace(responses=SimpleNamespace(create=_create))
+    adapter = _CodexCompletionsAdapter(client, "gpt-5.5")
+    adapter.create(
+        messages=[{"role": "user", "content": "hi"}],
+        extra_headers={OPENCODE_SESSION_HEADER: "sess-codex"},
+    )
+
+    assert captured["extra_headers"][OPENCODE_SESSION_HEADER] == "sess-codex"
+
+
+def test_anthropic_aux_adapter_forwards_extra_headers_to_messages(monkeypatch):
+    from agent import anthropic_adapter
+    from agent import transports
+    from agent.auxiliary_client import _AnthropicCompletionsAdapter
+
+    captured = {}
+
+    def _create_message(_client, api_kwargs, **_kwargs):
+        captured.update(api_kwargs)
+        return SimpleNamespace(usage=None)
+
+    class _Transport:
+        @staticmethod
+        def normalize_response(_response, **_kwargs):
+            return SimpleNamespace(
+                content="ok",
+                tool_calls=None,
+                reasoning=None,
+                finish_reason="stop",
+            )
+
+    monkeypatch.setattr(anthropic_adapter, "create_anthropic_message", _create_message)
+    monkeypatch.setattr(transports, "get_transport", lambda _mode: _Transport())
+
+    adapter = _AnthropicCompletionsAdapter(SimpleNamespace(), "claude-sonnet-4-5")
+    adapter.create(
+        messages=[{"role": "user", "content": "hi"}],
+        extra_headers={OPENCODE_SESSION_HEADER: "sess-anthropic"},
+    )
+
+    assert captured["extra_headers"][OPENCODE_SESSION_HEADER] == "sess-anthropic"
