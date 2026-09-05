@@ -12507,16 +12507,30 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         if not should:
             return False
 
-        # Dedup: agent already called TTS tool
+        # Dedup: agent already called TTS tool in the CURRENT turn.
+        # Previously this scanned the whole session history, so one manual
+        # text_to_speech call (e.g. a voice test) silently disabled auto-voice
+        # for every later reply in the session.  Scoping to messages after the
+        # last user message keeps the real protection - no double voice when
+        # the agent synthesises its own audio this turn - without letting old
+        # turns poison the rest of the session.  If no user message is found
+        # (edge case), scan_from = 0 reproduces the old whole-history scan.
+        last_user_idx = -1
+        for i, msg in enumerate(agent_messages):
+            if msg.get("role") == "user":
+                last_user_idx = i
         has_agent_tts = any(
             msg.get("role") == "assistant"
             and any(
                 tc.get("function", {}).get("name") == "text_to_speech"
                 for tc in (msg.get("tool_calls") or [])
             )
-            for msg in agent_messages
+            for msg in agent_messages[last_user_idx + 1 :]
         )
         if has_agent_tts:
+            logger.info(
+                "Auto voice reply: skip - agent called text_to_speech in current turn (dedup)"
+            )
             return False
 
         # Dedup: base adapter auto-TTS already handles voice input
@@ -12541,9 +12555,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             if not tts_text:
                 return
 
-            # Telegram's adapter only sends native voice bubbles for OGG/Opus.
+            # Telegram + Discord adapters send native voice bubbles (OGG/Opus);
+            # Discord requires Opus for its flags=8192 voice-message format.
             # Other platforms keep the existing MP3 default.
-            audio_ext = "ogg" if event.source.platform == Platform.TELEGRAM else "mp3"
+            audio_ext = "ogg" if event.source.platform in (Platform.TELEGRAM, Platform.DISCORD) else "mp3"
             audio_path = os.path.join(
                 tempfile.gettempdir(), "hermes_voice",
                 f"tts_reply_{_uuid.uuid4().hex[:12]}.{audio_ext}",
@@ -12596,6 +12611,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     "metadata": thread_meta,
                 }
                 await adapter.send_voice(**send_kwargs)
+
+            # Observability: confirm delivery instead of failing silently
+            logger.info(
+                "Auto voice reply: sent voice msg chat=%s", event.source.chat_id
+            )
         except Exception as e:
             logger.warning("Auto voice reply failed: %s", e, exc_info=True)
         finally:

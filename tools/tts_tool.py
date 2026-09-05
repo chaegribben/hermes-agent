@@ -22,8 +22,8 @@ Custom command providers:
   See the Local Command section of ``website/docs/user-guide/features/tts.md``.
 
 Output formats:
-- Opus (.ogg) for Telegram voice bubbles (requires ffmpeg for Edge TTS)
-- MP3 (.mp3) for everything else (CLI, Discord, WhatsApp)
+- Opus (.ogg) for Telegram and Discord voice bubbles (requires ffmpeg for Edge TTS)
+- MP3 (.mp3) for everything else (CLI, WhatsApp)
 
 Configuration is loaded from ~/.hermes/config.yaml under the 'tts:' key.
 The user chooses the provider and voice; the model just sends text.
